@@ -65,6 +65,8 @@ class Account(object):
     def all_investing(self):
         if 'ALL INVESTING ACCOUNTS' in self.data:
             return True
+        if 'ALL ACCOUNTS' in self.data:
+            return True
         return False
 
     @property
@@ -453,6 +455,7 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
         )))
     invposlist=INVPOSLIST(*pos)
     trans=[]
+    recorded_dividends=[]
     for trndate, symbol, desc, amt in account.dividends():
         invtran=INVTRAN(fitid=hashfrom(str(trndate) + str(amt)), dttrade=trndate, memo=desc)
         secid=SECID(uniqueid=symbol, uniqueidtype='TICKER')
@@ -462,19 +465,25 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
                             total=amt,
                             subacctsec='OTHER',
                             subacctfund='OTHER'))
+        # There is a quirk where dividends on last days of the quarter show up
+        # in the cash account but not the activity, and are instead reported in
+        # activity the next quarter.
+        recorded_dividends.append((trndate, amt))
 
     for desc, trndate, symbol, price, chg_shares, chg_value, _, _ in account.activity_detail():
         invtran=INVTRAN(fitid=hashfrom(str(trndate) + str(chg_shares)), dttrade=trndate, memo=desc)
         secid=SECID(uniqueid=symbol, uniqueidtype='TICKER')
-        if desc=='Dividend Reinvestment':
-            trans.append(REINVEST(invtran=invtran,
-                          secid=secid,
-                          incometype='DIV',
-                          units=chg_shares,
-                          unitprice=price,
-                          total=chg_value,
-                          subacctsec='OTHER'))
-            continue
+        # if desc=='Dividend Reinvestment':
+        # "reinvest" is actually a tracked cash in / buy, not a special REINV
+        # where dividends are paid in stock
+        #    trans.append(REINVEST(invtran=invtran,
+        #                  secid=secid,
+        #                  incometype='DIV',
+        #                  units=chg_shares,
+        #                  unitprice=price,
+        #                  total=chg_value,
+        #                  subacctsec='OTHER'))
+        #    continue
         if float(chg_shares) >= 0:
             invbuy=INVBUY(invtran=invtran,
                           secid=secid,
@@ -487,9 +496,9 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
             continue
         invsell=INVSELL(invtran=invtran,
                       secid=secid,
-                      units=chg_shares,
+                      units=abs(float(chg_shares)),
                       unitprice=price,
-                      total=chg_value,
+                      total=abs(float(chg_value)),
                       subacctsec='OTHER',
                       subacctfund='OTHER')
         trans.append(SELLMF(invsell=invsell, selltype='SELL'))
@@ -498,8 +507,9 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
         cash = cash_ira
     else:
         cash = cash_taxable
+    cashbal = 0
     if cash:
-        for trndate, goal, desc, trn, _ in cash.sweep_account_activity():
+        for trndate, goal, desc, trn, cashbal in cash.sweep_account_activity():
             if goal.upper() != account.name:
                 continue
             action, _, name = desc.split(' ', 2)
@@ -530,6 +540,8 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
                     continue
                 if action == 'Settlement':
                     continue
+                if action == 'Payment' and (trndate, trn) in recorded_dividends:
+                    continue
                 trntype={
                     'Transfer': 'XFER',
                     'Payment': 'DIV',
@@ -538,14 +550,13 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
                             dtposted=trndate,
                             trnamt=trn,
                             fitid=hashfrom(str(trndate) + desc),
-                            name=name,
-                            memo=desc)
+                            name=desc)
             bt = INVBANKTRAN(stmttrn=stmttrn,
                              subacctfund='OTHER')
             trans.append(bt)
     tranlist=INVTRANLIST(*trans, dtstart=before, dtend=asof)
     acctfrom= INVACCTFROM(brokerid='Betterment', acctid=account.account_no)
-    invbal=INVBAL(availcash=balance, marginbalance=0, shortbalance=0)
+    invbal=INVBAL(availcash=cashbal, marginbalance=0, shortbalance=0)
     invstmtrs = INVSTMTRS(dtasof=asof,
                           curdef='USD',
                           invacctfrom=acctfrom,
