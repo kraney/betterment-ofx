@@ -2,7 +2,7 @@
 import re
 import subprocess
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import xml.etree.ElementTree as ET
 import hashlib
@@ -373,11 +373,6 @@ def breakdown_by_account(textlist):
         elif item.startswith('Total Invested'):
             if accounts and accounts[-1].all_investing:
                 allinvesting=accounts[-1]
-            if allinvesting and \
-                    isinstance(accounts[-1], Investment) and \
-                    not accounts[-1].all_investing and \
-                    not accounts[-1].account_no:
-                accounts[-1].find_account_no(allinvesting)
             accounts.append(Investment())
             currpage.append(item)
         elif item.startswith('CASH ACTIVITY '):
@@ -388,6 +383,11 @@ def breakdown_by_account(textlist):
             if len(accounts) > 0:
                 accounts[-1].extend(currpage)
             currpage=[]
+            if allinvesting and \
+                    isinstance(accounts[-1], Investment) and \
+                    not accounts[-1].all_investing and \
+                    not accounts[-1].account_no:
+                accounts[-1].find_account_no(allinvesting)
         else:
             currpage.append(item)
     if len(accounts) > 0:
@@ -455,7 +455,7 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
         )))
     invposlist=INVPOSLIST(*pos)
     trans=[]
-    recorded_dividends=[]
+    recorded_dividends={}
     for trndate, symbol, desc, amt in account.dividends():
         invtran=INVTRAN(fitid=hashfrom(str(trndate) + str(amt)), dttrade=trndate, memo=desc)
         secid=SECID(uniqueid=symbol, uniqueidtype='TICKER')
@@ -468,10 +468,10 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
         # There is a quirk where dividends on last days of the quarter show up
         # in the cash account but not the activity, and are instead reported in
         # activity the next quarter.
-        recorded_dividends.append((trndate, amt))
+        recorded_dividends.setdefault(amt, []).append(trndate)
 
     for desc, trndate, symbol, price, chg_shares, chg_value, _, _ in account.activity_detail():
-        invtran=INVTRAN(fitid=hashfrom(str(trndate) + str(chg_shares)), dttrade=trndate, memo=desc)
+        invtran=INVTRAN(fitid=hashfrom(str(trndate) + str(desc) + str(chg_shares)), dttrade=trndate, memo=desc)
         secid=SECID(uniqueid=symbol, uniqueidtype='TICKER')
         # if desc=='Dividend Reinvestment':
         # "reinvest" is actually a tracked cash in / buy, not a special REINV
@@ -523,7 +523,7 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
             stmttrn=STMTTRN(trntype=trntype,
                             dtposted=trndate,
                             trnamt=trn,
-                            fitid=hashfrom(str(trndate) + desc),
+                            fitid=hashfrom(str(trndate) + desc + str(trn)),
                             name=name,
                             memo=desc)
             trans.append(INVBANKTRAN(stmttrn=stmttrn,
@@ -540,7 +540,14 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
                     continue
                 if action == 'Settlement':
                     continue
-                if action == 'Payment' and (trndate, trn) in recorded_dividends:
+                try:
+                    if action == 'Payment' and trn in recorded_dividends:
+                        for possible in recorded_dividends[trn]:
+                            # if we recorded a dividend for the same amount within 5
+                            # days before the cash record, assume it's the same one
+                            if trndate - timedelta(days=5) <= possible and trndate >= possible:
+                                raise Exception("skip it")
+                except Exception:
                     continue
                 trntype={
                     'Transfer': 'XFER',
@@ -549,13 +556,16 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
             stmttrn=STMTTRN(trntype=trntype,
                             dtposted=trndate,
                             trnamt=trn,
-                            fitid=hashfrom(str(trndate) + desc),
+                            fitid=hashfrom(str(trndate) + desc + str(trn)),
                             name=desc)
             bt = INVBANKTRAN(stmttrn=stmttrn,
                              subacctfund='OTHER')
             trans.append(bt)
     tranlist=INVTRANLIST(*trans, dtstart=before, dtend=asof)
     acctfrom= INVACCTFROM(brokerid='Betterment', acctid=account.account_no)
+    # cashbal actually represents an aggregated sweep account, either all taxable or
+    # all ira accounts rolled together. But I don't see a way to represent that. Nor
+    # do I see a way to automatically split what's reported into separate balances
     invbal=INVBAL(availcash=cashbal, marginbalance=0, shortbalance=0)
     invstmtrs = INVSTMTRS(dtasof=asof,
                           curdef='USD',
