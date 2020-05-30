@@ -493,7 +493,9 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
                             memo=desc)
             trans.append(INVBANKTRAN(stmttrn=stmttrn,
                                      subacctfund='CASH'))
-        if float(chg_shares) >= 0:
+        # Betterment sometimes reports "-0.000" due to rounding. It's still a
+        # sale.
+        if float(chg_shares) >= 0 and not chg_shares.startswith("-"):
             invbuy=INVBUY(invtran=invtran,
                           secid=secid,
                           units=chg_shares,
