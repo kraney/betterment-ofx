@@ -484,6 +484,15 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
         #                  total=chg_value,
         #                  subacctsec='OTHER'))
         #    continue
+        if desc=='Advisory Fee':
+            stmttrn=STMTTRN(trntype='FEE',
+                            dtposted=trndate,
+                            trnamt=float(chg_value),
+                            fitid=hashfrom(str(trndate) + desc + str(chg_value)),
+                            name='Betterment',
+                            memo=desc)
+            trans.append(INVBANKTRAN(stmttrn=stmttrn,
+                                     subacctfund='CASH'))
         if float(chg_shares) >= 0:
             invbuy=INVBUY(invtran=invtran,
                           secid=secid,
