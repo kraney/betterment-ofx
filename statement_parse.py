@@ -460,7 +460,7 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
     trans=[]
     recorded_dividends={}
     for trndate, symbol, desc, amt in account.dividends():
-        invtran=INVTRAN(fitid=hashfrom(str(trndate) + str(amt)), dttrade=trndate, memo=desc)
+        invtran=INVTRAN(fitid=hashfrom(str(trndate) + desc + str(amt)), dttrade=trndate, memo=desc)
         secid=SECID(uniqueid=symbol, uniqueidtype='TICKER')
         trans.append(INCOME(invtran=invtran,
                             secid=secid,
