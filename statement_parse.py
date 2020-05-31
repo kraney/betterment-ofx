@@ -192,8 +192,12 @@ class Investment(Account):
         return ret
 
     def find_account_no(self, allsection):
-        if allsection:
-            self.account_no = allsection.subaccount[self.name]
+        if allsection and self.name in allsection.subaccount:
+            sys.stderr.write(self.name)
+            sys.stderr.write(" => ")
+            sys.stderr.write(hashfrom(self.name)[:6])
+            sys.stderr.write("\n")
+            self.account_no = allsection.subaccount[self.name] + "-" + hashfrom(self.name)[:6]
 
     def holdings(self):
         try:
@@ -385,8 +389,7 @@ def breakdown_by_account(textlist):
             currpage=[]
             if allinvesting and \
                     isinstance(accounts[-1], Investment) and \
-                    not accounts[-1].all_investing and \
-                    not accounts[-1].account_no:
+                    not accounts[-1].all_investing:
                 accounts[-1].find_account_no(allinvesting)
         else:
             currpage.append(item)
