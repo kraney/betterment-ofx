@@ -52,11 +52,11 @@ class Account(object):
     @property
     def account_no(self):
         if self.__account_no:
-            return self.__account_no
+            return self.__account_no + "-" + hashfrom(self.name)[:6]
         for line in self.data:
             match = re.search('ACCT # {acct}'.format(acct=ACCT), line)
             if match:
-                return match.group(1)
+                return match.group(1) + "-" + hashfrom(self.name)[:6]
     @account_no.setter
     def account_no(self, no):
         self.__account_no = no
@@ -95,6 +95,10 @@ class Account(object):
 
 
 class CashReserve(Account):
+    @property
+    def name(self):
+        return "Cash Reserve"
+
     @property
     def net_deposited(self):
         for item in self.data:
@@ -193,11 +197,7 @@ class Investment(Account):
 
     def find_account_no(self, allsection):
         if allsection and self.name in allsection.subaccount:
-            sys.stderr.write(self.name)
-            sys.stderr.write(" => ")
-            sys.stderr.write(hashfrom(self.name)[:6])
-            sys.stderr.write("\n")
-            self.account_no = allsection.subaccount[self.name] + "-" + hashfrom(self.name)[:6]
+            self.account_no = allsection.subaccount[self.name]
 
     def holdings(self):
         try:
@@ -659,6 +659,13 @@ text = p.stdout.decode()
 
 tl = text.split('\n')
 account = breakdown_by_account(tl)
+for a in account:
+    if isinstance(a, CashActivity) or not a.account_no:
+        continue
+    sys.stderr.write(a.account_no)
+    sys.stderr.write(" => ")
+    sys.stderr.write(a.name)
+    sys.stderr.write("\n")
 
 ofx = get_ofx(account)
 
