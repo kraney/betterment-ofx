@@ -40,6 +40,12 @@ def hashfrom(instr):
 
 
 class Account(object):
+    """
+    This is the base class for an account. The Betterment statement is broken up into sections by account.
+    This class and its subclasses will attempt to wrap up the data from the statement and hide any PDF weirdness
+    in how the data is represented.
+    """
+
     def __init__(self):
         self.data = []
         self.__account_no = None
@@ -92,6 +98,9 @@ class Account(object):
 
 
 class CashReserve(Account):
+    """
+    This class provides a high-level interface to get the data for a Cash Reserve account from the Betterment statement
+    """
     @property
     def name(self):
         return "Cash Reserve"
@@ -113,6 +122,9 @@ class CashReserve(Account):
                 return match.group(1).translate(dollar_trans)
 
     def holdings(self):
+        """
+        Returns the contents of the Holdings table in parsed form
+        """
         try:
             start = self.data.index('TOTAL HOLDINGS')
             end = self.data.index('TOTAL PROGRAM BANK DETAILS')
@@ -135,6 +147,9 @@ class CashReserve(Account):
                    match.group(4).translate(dollar_trans))
 
     def activity(self):
+        """
+        Returns the contents of the Activity table in parsed form
+        """
         try:
             start = self.data.index('ACTIVITY')
             end = self.data.index('TOTAL HOLDINGS')
@@ -157,6 +172,10 @@ class CashReserve(Account):
 
 
 class Investment(Account):
+    """
+    This class provides a high-level interface to read data from any investment
+    account in the Betterment statement
+    """
     @property
     def name(self):
         for line in self.data:
@@ -170,10 +189,17 @@ class Investment(Account):
         return 'IRA' in self.name
 
     def find_account_no(self, allsection):
+        """
+        Betterment doesn't put the account number in the heading for certain accounts. Lift the number
+        from the redundant (but incomplete) data in the summary
+        """
         if allsection and self.name == 'General Investing':
             self.account_no = allsection.account_no.split('-')[0]
 
     def holdings(self):
+        """
+        Returns the contents of the Holdings table in parsed form
+        """
         try:
             start = self.data.index(
                 'Type Description Ticker Shares Value Shares Value Shares Value')
@@ -206,6 +232,9 @@ class Investment(Account):
                    match.group(8).translate(dollar_trans))
 
     def dividends(self):
+        """
+        Returns the contents of the Dividends table in parsed form
+        """
         try:
             start = self.data.index('Payment Date Ticker Description Amount')
         except ValueError:
@@ -234,6 +263,9 @@ class Investment(Account):
                    match.group(4).translate(dollar_trans))
 
     def activity_detail(self):
+        """
+        Returns the contents of the Activity Detail table in parsed form
+        """
         try:
             start = self.data.index(
                 'Transaction3 Date4 Ticker Price Shares Value')
@@ -276,15 +308,28 @@ class Investment(Account):
 
 
 class CashActivity(object):
+    """
+    This class represents the "Cash Activity" content of the Betterment statement. It includes
+    both the sweep account data and the security account data
+    """
+
     def __init__(self):
         self.data = []
 
     def extend(self, data):
+        """
+        Used to add text content to the source data for this account
+        """
         self.data.extend(data)
+
+    # Betterment logs a redundant "account". This flag is set to true for the redundant account
     all_investing = False
 
     @ property
     def taxable(self):
+        """
+        Returns true if this account is a taxable account
+        """
         for line in self.data[:20]:
             if line.endswith('(TAXABLE)'):
                 return True
@@ -293,6 +338,9 @@ class CashActivity(object):
         return False
 
     def sweep_account_activity(self):
+        """
+        Return the contents of the sweep account activity table in parsed form
+        """
         try:
             start = self.data.index(
                 'Date Goal Description Transaction Balance')
@@ -323,6 +371,9 @@ class CashActivity(object):
                    match.group(5).translate(dollar_trans))
 
     def security_account_activity(self):
+        """
+        Return the contents of the activity table for the security account in parsed form
+        """
         try:
             start = self.data.index(
                 'Date Goal Description Transaction Balance')
@@ -356,6 +407,9 @@ class CashActivity(object):
 
 
 def breakdown_by_account(textlist):
+    """
+    Attempt to break up the content of a statement by account, identifying the type of account
+    """
     accounts = []
     currpage = []
     allinvesting = None
@@ -388,6 +442,9 @@ def breakdown_by_account(textlist):
 
 
 def get_bankmsgsrs(accounts):
+    """
+    This gathers the data for bank-like accounts and translates it to OFX structures
+    """
     # First see if there's a cash reserves account
     account = None
     for acc in accounts:
@@ -430,6 +487,9 @@ def get_bankmsgsrs(accounts):
 
 
 def get_invstmttrnrs(account, cash_taxable, cash_ira):
+    """
+    This gathers the data for an investment account and translates it to OFX structures
+    """
     asof, balance = account.ending_balance
     before, _ = account.beginning_balance
 
@@ -591,6 +651,9 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
 
 
 def get_investmsgsrs(accounts):
+    """
+    This generates OFX structures for all of the investment accounts
+    """
     # first, find the cash transactions
     cash_taxable = None
     cash_ira = None
@@ -614,6 +677,9 @@ def get_investmsgsrs(accounts):
 
 
 def get_seclistmsgsrs(accounts):
+    """
+    This generates OFX structures for any securities / tickers mentioned in the statement
+    """
     symbols = {}
     for account in accounts:
         if not isinstance(account, Investment):
@@ -636,6 +702,10 @@ def get_seclistmsgsrs(accounts):
 
 
 def get_ofx(accounts):
+    """
+    This generates the required sections for an OFX document by querying content
+    from the high-level account objects
+    """
     bankmsgsrs = get_bankmsgsrs(accounts)
     investmsgsrs = get_investmsgsrs(accounts)
     seclist = get_seclistmsgsrs(accounts)
@@ -654,6 +724,9 @@ def get_ofx(accounts):
 
 
 def load_file(filename):
+    """
+    Extract the text from the Betterment PDF and break it into a list of lines
+    """
     p = subprocess.run([
         "java", "-jar", "pdfbox-app-2.0.19.jar", "ExtractText", "-console", filename
     ], capture_output=True)
