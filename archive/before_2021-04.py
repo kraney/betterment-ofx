@@ -13,18 +13,17 @@ from ofxtools.utils import UTC
 from ofxtools.header import make_header
 
 
-DATEFMT1 = '%b %d, %Y'
-DATEFMT2 = '%b %d %Y'
-DATE = '([A-Za-z]{3} [0-9]+,? [0-9]{4})'
-MONEY = '(-?\$[0-9,.]+)'
-PCT = '(-?[0-9.,]+%)'
-SHARES = '(-?[0-9.,]+)'
-ACCT = '([0-9]*)'
-PAREN = '\(([^)]+)\)'
-SYMBOL = '([A-Z]+)'
+DATEFMT1='%b %d, %Y'
+DATEFMT2='%b %d %Y'
+DATE='([A-Za-z]{3} [0-9]+,? [0-9]{4})'
+MONEY='(-?\$[0-9,.]+)'
+PCT='(-?[0-9.,]+%)'
+SHARES='(-?[0-9.,]+)'
+ACCT='([0-9]*)'
+PAREN='\(([^)]+)\)'
+SYMBOL='([A-Z]+)'
 local = pytz.timezone("America/Los_Angeles")
-dollar_trans = str.maketrans("$,", "$,", "$,")
-
+dollar_trans = str.maketrans("$,","$,","$,")
 
 def datefrom(datestr):
     try:
@@ -34,24 +33,20 @@ def datefrom(datestr):
     local_dt = local.localize(naive, is_dst=None)
     return local_dt.astimezone(pytz.utc)
 
-
 def hashfrom(instr):
     return hashlib.md5(instr.encode()).hexdigest()
 
-
 class Account(object):
     def __init__(self):
-        self.data = []
-        self.__account_no = None
-
+        self.data=[]
+        self.__account_no=None
     def extend(self, data):
         self.data.extend(data)
 
     @property
     def external(self):
         for line in self.data[:20]:
-            if line.endswith('(External)'):
-                return True
+            if line.endswith('(EXTERNAL)'): return True
         return False
 
     @property
@@ -59,18 +54,18 @@ class Account(object):
         if self.__account_no:
             return self.__account_no + "-" + hashfrom(self.name)[:6]
         for line in self.data:
-            match = re.search('Account #{acct}'.format(acct=ACCT), line)
+            match = re.search('ACCT # {acct}'.format(acct=ACCT), line)
             if match:
                 return match.group(1) + "-" + hashfrom(self.name)[:6]
-        return hashfrom(self.name)[:6]
-
     @account_no.setter
     def account_no(self, no):
         self.__account_no = no
 
     @property
     def all_investing(self):
-        if 'Taxable Investing Account' in self.data:
+        if 'ALL INVESTING ACCOUNTS' in self.data:
+            return True
+        if 'ALL ACCOUNTS' in self.data:
             return True
         return False
 
@@ -90,6 +85,14 @@ class Account(object):
             if match:
                 return datefrom(match.group(1)), match.group(2).translate(dollar_trans)
 
+    @property
+    def net_change(self):
+        for item in self.data:
+            match = re.search('Net Change {money}'.format(
+                money=MONEY), item)
+            if match:
+                return match.group(1).translate(dollar_trans)
+
 
 class CashReserve(Account):
     @property
@@ -99,7 +102,7 @@ class CashReserve(Account):
     @property
     def net_deposited(self):
         for item in self.data:
-            match = re.search('Deposits {money}'.format(
+            match = re.search('Net Deposited {money}'.format(
                 money=MONEY), item)
             if match:
                 return match.group(1).translate(dollar_trans)
@@ -114,53 +117,62 @@ class CashReserve(Account):
 
     def holdings(self):
         try:
-            start = self.data.index('TOTAL HOLDINGS')
-            end = self.data.index('TOTAL PROGRAM BANK DETAILS')
+            start = self.data.index('Holdings')
+            end = self.data.index('Program Bank Details')
         except ValueError:
             return
-        holdings = self.data[start+2:end-1]
-        for i in range(0, len(holdings), 3):
-            if holdings[i] == 'TOTAL HOLDINGS':
+        holdings = self.data[start+6:end-1]
+        for i in range(0, len(holdings), 2):
+            if holdings[i] == 'Holdings':
                 # repeated title on page change
                 i += 4
                 continue
             bank = holdings[i]
-            match = re.search('^{money} {percent} {money} {money}$'.format(
-                money=MONEY, percent=PCT), holdings[i+2])
+            match = re.search('^(?:.*\*\*\*) {money} {percent} {money} {money}$'.format(
+                money=MONEY, percent=PCT), holdings[i+1])
             if not match:
-                raise Exception("Could not match against " + holdings[i+2])
+                raise Exception("Could not match against " + holdings[i+1])
             yield (bank, match.group(1),
-                   match.group(2).translate(dollar_trans),
-                   match.group(3).translate(dollar_trans),
-                   match.group(4).translate(dollar_trans))
+                match.group(2).translate(dollar_trans),
+                match.group(3).translate(dollar_trans),
+                match.group(4).translate(dollar_trans))
 
     def activity(self):
         try:
-            start = self.data.index('ACTIVITY')
-            end = self.data.index('TOTAL HOLDINGS')
+            start = self.data.index('Activity')
+            end = self.data.index('Holdings')
         except ValueError:
             return
         for item in self.data[start+2:end]:
-            if item == 'ACTIVITY' or item == 'Date Description Amount':
+            if item == 'Activity' or item == 'Date Description Amount':
                 # repeated title on page change
                 continue
-            match = re.search(
-                '^{date} (.*) {money}$'.format(date=DATE, money=MONEY), item)
+            match = re.search('^{date} (.*) {money}$'.format(date=DATE, money=MONEY), item)
             if not match:
                 raise Exception("Could not match against " + item)
-                continue
-            if match.group(2) == 'Beginning Balance':
-                continue
-            if match.group(2) == 'Ending Balance':
                 continue
             yield datefrom(match.group(1)), match.group(2), match.group(3).translate(dollar_trans)
 
 
 class Investment(Account):
     @property
+    def total_invested(self):
+        for item in self.data:
+            match = re.search('Total Invested {money}'.format(money=MONEY), item)
+            if match:
+                return match.group(1).translate(dollar_trans)
+
+    @property
+    def total_earned(self):
+        for item in self.data:
+            match = re.search('Total Earned {money}'.format(money=MONEY), item)
+            if match:
+                return match.group(1).translate(dollar_trans)
+
+    @property
     def name(self):
         for line in self.data:
-            match = re.search('^([A-Za-z ]+)(?: \(.*\))?$', line)
+            match = re.search('^([A-Z ]+)(?: \(.*\))?$', line)
             if match:
                 return match.group(1)
         return None
@@ -169,17 +181,30 @@ class Investment(Account):
     def is_ira(self):
         return 'IRA' in self.name
 
+    @property
+    def subaccount(self):
+        ret={}
+        account=None
+        for line in self.data:
+            match = re.search('^(.*) \(Acct # {acct}\)'.format(acct=ACCT), line)
+            if match:
+                account = match.group(2)
+            elif account:
+                match = re.search('^([^(]*)( \(.*\))?$', line)
+                if match:
+                    ret[match.group(1).upper()] = account
+        return ret
+
     def find_account_no(self, allsection):
-        if allsection and self.name == 'General Investing':
-            self.account_no = allsection.account_no.split('-')[0]
+        if allsection and self.name in allsection.subaccount:
+            self.account_no = allsection.subaccount[self.name]
 
     def holdings(self):
         try:
-            start = self.data.index(
-                'Type Description Ticker Shares Value Shares Value Shares Value')
+            start = self.data.index('Description Fund Shares Value Shares Value Shares Value')
         except ValueError:
             return
-        saved = None
+        saved=None
         for item in self.data[start+1:]:
             if item.startswith('Total '):
                 break
@@ -195,26 +220,26 @@ class Investment(Account):
             if not match:
                 # long names get wrapped and end up as a tiny line followed by
                 # full line
-                saved = item
+                saved=item
                 continue
             yield (match.group(1), match.group(2),
-                   match.group(3).translate(dollar_trans),
-                   match.group(4).translate(dollar_trans),
-                   match.group(5).translate(dollar_trans),
-                   match.group(6).translate(dollar_trans),
-                   match.group(7).translate(dollar_trans),
-                   match.group(8).translate(dollar_trans))
+                match.group(3).translate(dollar_trans),
+                match.group(4).translate(dollar_trans),
+                match.group(5).translate(dollar_trans),
+                match.group(6).translate(dollar_trans),
+                match.group(7).translate(dollar_trans),
+                match.group(8).translate(dollar_trans))
 
     def dividends(self):
         try:
-            start = self.data.index('Payment Date Ticker Description Amount')
+            start = self.data.index('Payment Date Fund Description Amount')
         except ValueError:
             return
-        saved = None
+        saved=None
         for item in self.data[start+1:]:
             if item.startswith('Total '):
                 break
-            if item == 'Payment Date Ticker Description Amount':
+            if item == 'Payment Date Fund Description Amount':
                 # repeated title on new page
                 saved = None
                 continue
@@ -226,81 +251,70 @@ class Investment(Account):
             if not match:
                 # long names get wrapped and end up as a tiny line followed by
                 # full line
-                saved = item
+                saved=item
                 continue
             yield (datefrom(match.group(1)),
-                   match.group(2),
-                   match.group(3),
-                   match.group(4).translate(dollar_trans))
+                match.group(2),
+                match.group(3),
+                match.group(4).translate(dollar_trans))
 
     def activity_detail(self):
         try:
-            start = self.data.index(
-                'Transaction3 Date4 Ticker Price Shares Value')
+            start = self.data.index('Transaction 2 Date 3 Fund Price Shares Value Shares Value')
         except ValueError:
             return
-        event = None
-        saved = None
-        saveddate = None
+        event=None
+        saved=None
         for item in self.data[start+1:]:
             if item.startswith('Total '):
                 break
-            if item == 'Transaction3 Date4 Ticker Price Shares Value':
+            if item == 'Transaction 2 Date 3 Fund Price Shares Value Shares Value':
                 # repeated title on new page
                 saved = None
                 continue
             if saved:
                 item = saved + " " + item
                 saved = None
-            # the event header from the following line sometimes gets tacked on to the end
-            match = re.search('^(.* )?{date} {symbol} {money} {shares} {money}[A-Za-z ]*$'.format(
+            match = re.search('^(.* )?{date} {symbol} {money} {shares} {money} {shares} {money}$'.format(
                 date=DATE, symbol=SYMBOL, money=MONEY, shares=SHARES), item)
             if not match:
-                match = re.search('^(.*)? {money}$'.format(money=MONEY), item)
-                if match:
-                    event = match.group(1).strip()
-                    if event == 'Advisory Fee':
-                        yield (event, saveddate, None, None, None, match.group(2).translate(dollar_trans))
-                    continue
                 # long names get wrapped and end up as a tiny line followed by
                 # full line
-                saved = item
+                saved=item
                 continue
             if match.group(1):
                 event = match.group(1).strip()
-            saveddate = datefrom(match.group(2))
             yield (event, datefrom(match.group(2)), match.group(3),
-                   match.group(4).translate(dollar_trans),
-                   match.group(5).translate(dollar_trans),
-                   match.group(6).translate(dollar_trans))
+                match.group(4).translate(dollar_trans),
+                match.group(5).translate(dollar_trans),
+                match.group(6).translate(dollar_trans),
+                match.group(7).translate(dollar_trans),
+                match.group(8).translate(dollar_trans))
+
 
 
 class CashActivity(object):
     def __init__(self):
-        self.data = []
-
+        self.data=[]
     def extend(self, data):
         self.data.extend(data)
-    all_investing = False
+    all_investing=False
 
-    @ property
+    @property
     def taxable(self):
         for line in self.data[:20]:
-            if line.endswith('(TAXABLE)'):
-                return True
-            if line.endswith('(IRA)'):
-                return False
+            if line.endswith('(TAXABLE)'): return True
+            if line.endswith('(IRA)'): return False
         return False
 
     def sweep_account_activity(self):
         try:
-            start = self.data.index(
-                'Date Goal Description Transaction Balance')
+            start = self.data.index('Date Goal Description Transaction Balance')
         except ValueError:
             return
-        if not self.data[start-5].startswith('SWEEP '):
+        if not self.data[start-1].startswith('Sweep Account '):
             return
-        saved = None
+        saved=None
         for item in self.data[start+1:]:
             if item.startswith('Balance '):
                 break
@@ -316,23 +330,20 @@ class CashActivity(object):
             if not match:
                 # long names get wrapped and end up as a tiny line followed by
                 # full line
-                saved = item
+                saved=item
                 continue
             yield (datefrom(match.group(1)), match.group(2), match.group(3),
-                   match.group(4).translate(dollar_trans),
-                   match.group(5).translate(dollar_trans))
-
+                match.group(4).translate(dollar_trans),
+                match.group(5).translate(dollar_trans))
+        
     def security_account_activity(self):
         try:
-            start = self.data.index(
-                'Date Goal Description Transaction Balance')
-            while not self.data[start-1].startswith('SECURITIES ACCOUNT '):
-                start = start+1 + \
-                    self.data[start +
-                              1:].index('Date Goal Description Transaction Balance')
+            start = self.data.index('Date Goal Description Transaction Balance')
+            while not self.data[start-1].startswith('Securities Account '):
+                start = start+1+self.data[start+1:].index('Date Goal Description Transaction Balance')
         except ValueError:
             return
-        saved = None
+        saved=None
         for item in self.data[start+1:]:
             if item.startswith('Balance '):
                 break
@@ -348,34 +359,34 @@ class CashActivity(object):
             if not match:
                 # long names get wrapped and end up as a tiny line followed by
                 # full line
-                saved = item
+                saved=item
                 continue
             yield (datefrom(match.group(1)), match.group(2), match.group(3),
-                   match.group(4).translate(dollar_trans),
-                   match.group(5).translate(dollar_trans))
-
+                match.group(4).translate(dollar_trans),
+                match.group(5).translate(dollar_trans))
+        
 
 def breakdown_by_account(textlist):
-    accounts = []
-    currpage = []
-    allinvesting = None
+    accounts=[]
+    currpage=[]
+    allinvesting=None
     for item in textlist:
-        if item.startswith('ACTIVITY'):
+        if item.startswith('Net Deposited'):
             accounts.append(CashReserve())
             currpage.append(item)
-        elif item.startswith('HOLDINGS'):
+        elif item.startswith('Total Invested'):
             if accounts and accounts[-1].all_investing:
-                allinvesting = accounts[-1]
+                allinvesting=accounts[-1]
             accounts.append(Investment())
             currpage.append(item)
-        elif re.match('SWEEP[A-Z ]*CASH ACTIVITY', item):
+        elif item.startswith('CASH ACTIVITY '):
             accounts.append(CashActivity())
             currpage.append(item)
         elif re.match('Page [0-9]+ of [0-9]+', item):
             # starting a new page
             if len(accounts) > 0:
                 accounts[-1].extend(currpage)
-            currpage = []
+            currpage=[]
             if allinvesting and \
                     isinstance(accounts[-1], Investment) and \
                     not accounts[-1].all_investing:
@@ -400,15 +411,15 @@ def get_bankmsgsrs(accounts):
     asof, balance = account.ending_balance
     ledgerbal = LEDGERBAL(balamt=Decimal(balance),
                           dtasof=asof)
-    trns = []
+    trns=[]
     for trndate, desc, amt in account.activity():
         amt = float(amt)
         if amt < 0:
-            trntype = 'DEBIT'
+            trntype='DEBIT'
         elif desc == 'Interest Payment':
-            trntype = 'INT'
+            trntype='INT'
         else:
-            trntype = 'CREDIT'
+            trntype='CREDIT'
         trns.append(STMTTRN(trntype=trntype,
                             dtposted=trndate,
                             trnamt=Decimal(amt),
@@ -417,27 +428,24 @@ def get_bankmsgsrs(accounts):
                             memo=desc))
     banktranlist = BANKTRANLIST(*trns, dtstart=before,
                                 dtend=asof)
-    acctfrom = BANKACCTFROM(
-        bankid='BTRMNT', acctid=account.account_no, accttype='SAVINGS')
+    acctfrom = BANKACCTFROM(bankid='BTRMNT', acctid=account.account_no, accttype='SAVINGS')
     stmtrs = STMTRS(curdef='USD',
                     bankacctfrom=acctfrom,
                     ledgerbal=ledgerbal,
                     banktranlist=banktranlist)
     status = STATUS(code=0, severity='INFO')
-    stmttrnrs = STMTTRNRS(trnuid=hashfrom(
-        str(before) + str(asof)), status=status, stmtrs=stmtrs)
+    stmttrnrs = STMTTRNRS(trnuid=hashfrom(str(before) + str(asof)), status=status, stmtrs=stmtrs)
     return BANKMSGSRSV1(stmttrnrs)
-
 
 def get_invstmttrnrs(account, cash_taxable, cash_ira):
     asof, balance = account.ending_balance
     before, _ = account.beginning_balance
 
-    pos = []
+    pos=[]
     for desc, symbol, _, _, _, _, shares, value in account.holdings():
         if float(shares) == 0.0:
             continue
-        secid = SECID(uniqueid=symbol, uniqueidtype='TICKER')
+        secid=SECID(uniqueid=symbol, uniqueidtype='TICKER')
         pos.append(POSSTOCK(invpos=INVPOS(
             secid=secid,
             heldinacct='OTHER',
@@ -448,13 +456,12 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
             dtpriceasof=asof,
             memo=desc,
         )))
-    invposlist = INVPOSLIST(*pos)
-    trans = []
-    recorded_dividends = {}
+    invposlist=INVPOSLIST(*pos)
+    trans=[]
+    recorded_dividends={}
     for trndate, symbol, desc, amt in account.dividends():
-        invtran = INVTRAN(fitid=hashfrom(
-            str(trndate) + desc + str(amt)), dttrade=trndate, memo=desc)
-        secid = SECID(uniqueid=symbol, uniqueidtype='TICKER')
+        invtran=INVTRAN(fitid=hashfrom(str(trndate) + desc + str(amt)), dttrade=trndate, memo=desc)
+        secid=SECID(uniqueid=symbol, uniqueidtype='TICKER')
         trans.append(INCOME(invtran=invtran,
                             secid=secid,
                             incometype='DIV',
@@ -466,9 +473,9 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
         # activity the next quarter.
         recorded_dividends.setdefault(amt, []).append(trndate)
 
-    for desc, trndate, symbol, price, chg_shares, chg_value in account.activity_detail():
-        invtran = INVTRAN(fitid=hashfrom(
-            str(trndate) + str(desc) + str(price) + str(chg_shares)), dttrade=trndate, memo=desc)
+    for desc, trndate, symbol, price, chg_shares, chg_value, _, _ in account.activity_detail():
+        invtran=INVTRAN(fitid=hashfrom(str(trndate) + str(desc) + str(chg_shares)), dttrade=trndate, memo=desc)
+        secid=SECID(uniqueid=symbol, uniqueidtype='TICKER')
         # if desc=='Dividend Reinvestment':
         # "reinvest" is actually a tracked cash in / buy, not a special REINV
         # where dividends are paid in stock
@@ -480,38 +487,34 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
         #                  total=chg_value,
         #                  subacctsec='OTHER'))
         #    continue
-        if desc and desc.find('Advisory Fee') != -1:
-            stmttrn = STMTTRN(trntype='FEE',
-                              dtposted=trndate,
-                              trnamt=float(chg_value),
-                              fitid=hashfrom(
-                                  str(trndate) + desc + str(chg_value)),
-                              name='Betterment',
-                              memo=desc)
+        if desc=='Advisory Fee':
+            stmttrn=STMTTRN(trntype='FEE',
+                            dtposted=trndate,
+                            trnamt=float(chg_value),
+                            fitid=hashfrom(str(trndate) + desc + str(chg_value)),
+                            name='Betterment',
+                            memo=desc)
             trans.append(INVBANKTRAN(stmttrn=stmttrn,
                                      subacctfund='CASH'))
-            if symbol is None:
-                continue
-        secid = SECID(uniqueid=symbol, uniqueidtype='TICKER')
         # Betterment sometimes reports "-0.000" due to rounding. It's still a
         # sale.
         if float(chg_shares) >= 0 and not chg_shares.startswith("-"):
-            invbuy = INVBUY(invtran=invtran,
-                            secid=secid,
-                            units=chg_shares,
-                            unitprice=price,
-                            total=chg_value,
-                            subacctsec='OTHER',
-                            subacctfund='OTHER')
-            trans.append(BUYMF(invbuy=invbuy, buytype='BUY'))
-            continue
-        invsell = INVSELL(invtran=invtran,
+            invbuy=INVBUY(invtran=invtran,
                           secid=secid,
-                          units=abs(float(chg_shares)),
+                          units=chg_shares,
                           unitprice=price,
-                          total=abs(float(chg_value)),
+                          total=chg_value,
                           subacctsec='OTHER',
                           subacctfund='OTHER')
+            trans.append(BUYMF(invbuy=invbuy, buytype='BUY'))
+            continue
+        invsell=INVSELL(invtran=invtran,
+                      secid=secid,
+                      units=abs(float(chg_shares)),
+                      unitprice=price,
+                      total=abs(float(chg_value)),
+                      subacctsec='OTHER',
+                      subacctfund='OTHER')
         trans.append(SELLMF(invsell=invsell, selltype='SELL'))
 
     if account.is_ira:
@@ -526,25 +529,25 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
             action, _, name = desc.split(' ', 2)
             if name == 'Securities Account':
                 continue
-            trntype = {
+            trntype={
                 'Deposit': 'DEP',
                 'Transfer': 'XFER',
                 'Withdrawal': 'CASH',
             }.get(action, 'OTHER')
-            stmttrn = STMTTRN(trntype=trntype,
-                              dtposted=trndate,
-                              trnamt=trn,
-                              fitid=hashfrom(str(trndate) + desc + str(trn)),
-                              name=name,
-                              memo=desc)
+            stmttrn=STMTTRN(trntype=trntype,
+                            dtposted=trndate,
+                            trnamt=trn,
+                            fitid=hashfrom(str(trndate) + desc + str(trn)),
+                            name=name,
+                            memo=desc)
             trans.append(INVBANKTRAN(stmttrn=stmttrn,
                                      subacctfund='CASH'))
         for trndate, goal, desc, trn, _ in cash.security_account_activity():
             if goal.upper() != account.name:
                 continue
             if desc == 'Fees':
-                trntype = 'FEE'
-                name = 'Betterment'
+                trntype='FEE'
+                name='Betterment'
             else:
                 action, _, name = desc.split(' ', 2)
                 if name == 'Sweep Account':
@@ -560,24 +563,24 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
                                 raise Exception("skip it")
                 except Exception:
                     continue
-                trntype = {
+                trntype={
                     'Transfer': 'XFER',
                     'Payment': 'DIV',
                 }.get(action, 'OTHER')
-            stmttrn = STMTTRN(trntype=trntype,
-                              dtposted=trndate,
-                              trnamt=trn,
-                              fitid=hashfrom(str(trndate) + desc + str(trn)),
-                              name=desc)
+            stmttrn=STMTTRN(trntype=trntype,
+                            dtposted=trndate,
+                            trnamt=trn,
+                            fitid=hashfrom(str(trndate) + desc + str(trn)),
+                            name=desc)
             bt = INVBANKTRAN(stmttrn=stmttrn,
                              subacctfund='OTHER')
             trans.append(bt)
-    tranlist = INVTRANLIST(*trans, dtstart=before, dtend=asof)
-    acctfrom = INVACCTFROM(brokerid='Betterment', acctid=account.account_no)
+    tranlist=INVTRANLIST(*trans, dtstart=before, dtend=asof)
+    acctfrom= INVACCTFROM(brokerid='Betterment', acctid=account.account_no)
     # cashbal actually represents an aggregated sweep account, either all taxable or
     # all ira accounts rolled together. But I don't see a way to represent that. Nor
     # do I see a way to automatically split what's reported into separate balances
-    invbal = INVBAL(availcash=cashbal, marginbalance=0, shortbalance=0)
+    invbal=INVBAL(availcash=cashbal, marginbalance=0, shortbalance=0)
     invstmtrs = INVSTMTRS(dtasof=asof,
                           curdef='USD',
                           invacctfrom=acctfrom,
@@ -589,7 +592,6 @@ def get_invstmttrnrs(account, cash_taxable, cash_ira):
                         status=status,
                         invstmtrs=invstmtrs)
 
-
 def get_investmsgsrs(accounts):
     # first, find the cash transactions
     cash_taxable = None
@@ -600,7 +602,7 @@ def get_investmsgsrs(accounts):
         if account.taxable:
             cash_taxable = account
         else:
-            cash_ira = account
+            case_ira = account
     st = []
     for account in accounts:
         if not isinstance(account, Investment):
@@ -612,9 +614,8 @@ def get_investmsgsrs(accounts):
         st.append(get_invstmttrnrs(account, cash_taxable, cash_ira))
     return INVSTMTMSGSRSV1(*st)
 
-
 def get_seclistmsgsrs(accounts):
-    symbols = {}
+    symbols={}
     for account in accounts:
         if not isinstance(account, Investment):
             continue
@@ -624,16 +625,14 @@ def get_seclistmsgsrs(accounts):
         # mentioned from earlier transactions
         for _, symbol, name, _ in account.dividends():
             symbols.setdefault(symbol, name)
-        for _, _, symbol, _, _, _ in account.activity_detail():
-            if symbol:
-                symbols.setdefault(symbol, symbol)
-    stockinfo = []
+        for _, _, symbol, _, _, _, _, _ in account.activity_detail():
+            symbols.setdefault(symbol, symbol)
+    stockinfo=[]
     for symbol, name in symbols.items():
         secid = SECID(uniqueid=symbol, uniqueidtype='TICKER')
         secinfo = SECINFO(secid=secid, secname=name, ticker=symbol)
         stockinfo.append(STOCKINFO(secinfo=secinfo))
     return SECLISTMSGSRSV1(SECLIST(*stockinfo))
-
 
 def get_ofx(accounts):
     bankmsgsrs = get_bankmsgsrs(accounts)
@@ -652,33 +651,27 @@ def get_ofx(accounts):
                invstmtmsgsrsv1=investmsgsrs,
                seclistmsgsrsv1=seclist)
 
-
-def load_file(filename):
-    p = subprocess.run([
+filename = sys.argv[1]
+p = subprocess.run([
         "java", "-jar", "pdfbox-app-2.0.19.jar", "ExtractText", "-console", filename
     ], capture_output=True)
-    text = p.stdout.decode()
+text = p.stdout.decode()
 
-    return text.split('\n')
+tl = text.split('\n')
+account = breakdown_by_account(tl)
+for a in account:
+    if isinstance(a, CashActivity) or not a.account_no:
+        continue
+    sys.stderr.write(a.account_no)
+    sys.stderr.write(" => ")
+    sys.stderr.write(a.name)
+    sys.stderr.write("\n")
 
+ofx = get_ofx(account)
 
-if __name__ == '__main__':
-    filename = sys.argv[1]
+root = ofx.to_etree()
+header = str(make_header(version=220))
+message = ET.tostring(root).decode()
 
-    account = breakdown_by_account(load_file(filename))
-    for a in account:
-        if isinstance(a, CashActivity) or not a.account_no:
-            continue
-        sys.stderr.write(a.account_no)
-        sys.stderr.write(" => ")
-        sys.stderr.write(a.name)
-        sys.stderr.write("\n")
-
-    ofx = get_ofx(account)
-
-    root = ofx.to_etree()
-    header = str(make_header(version=220))
-    message = ET.tostring(root).decode()
-
-    print(header)
-    print(message)
+print(header)
+print(message)
